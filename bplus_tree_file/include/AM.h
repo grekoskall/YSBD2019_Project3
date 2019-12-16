@@ -6,7 +6,27 @@
 extern int AM_errno;
 
 #define AME_OK 0
+#define AME_INIT 1
+#define AME_CREATE_FILE 2
+#define AME_OPEN_FILE 3
+#define AME_ALLOCATE 4
+#define AME_COUNTER 5
+#define AME_BLOCKS 6
+#define AME_GETBLOCK 7
+#define AME_UNPIN 8
+#define AME_DESTROY 9
+#define AME_REMOVE 10
+#define AME_OPENINDEX 11
+#define AME_OPEN_SCAN 12
+#define AME_CLOSE 13
+#define AME_CLOSE_NOT_EXIST 14
+#define AME_INSERT_ERROR 15
+#define AME_FILE_DESC_NOT_FOUND 16
 #define AME_EOF -1
+
+/* Defines for array sizes */
+#define MAX_OPEN_FILES 20
+#define MAX_OPEN_SCANS 20
 
 #define EQUAL 1
 #define NOT_EQUAL 2
