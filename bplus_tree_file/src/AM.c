@@ -47,8 +47,8 @@ void AM_Init() {
         Files_array[i].fileName = NULL;
         Files_array[i].fileDesc = -1;
         Files_array[i].rootBlock = 0;
-        Files_array[i].attrType1 = '/0';
-        Files_array[i].attrType2 = '/0';
+        Files_array[i].attrType1 = 'l';
+        Files_array[i].attrType2 = 'l';
         Files_array[i].attrLength1 = -1;
         Files_array[i].attrLength2 = -1;
     }
@@ -230,7 +230,7 @@ int AM_OpenIndex (char *fileName) {
             memcpy(&attrType2, data+sizeof(char)*2+sizeof(int), sizeof(char));
             memcpy(&attrLength2, data+sizeof(char)*3+sizeof(int), sizeof(int));
 
-            if(BF_Unpinblock(block) != BF_OK){
+            if(BF_UnpinBlock(block) != BF_OK){
                 AM_errno = AME_UNPIN;
                 AM_PrintError("Error while unpining a block.");
                 exit(AM_errno);
@@ -242,7 +242,7 @@ int AM_OpenIndex (char *fileName) {
             Files_array[i].attrLength1 = attrLength1;
             Files_array[i].attrLength2 = attrLength2;
 
-            BF_Block_Destroy(block);
+            BF_Block_Destroy(&block);
             break;
         }
     }
@@ -280,10 +280,10 @@ int AM_CloseIndex (int fileDesc) {
             free(Files_array[i].fileName);
             Files_array[i].fileDesc = -1;
             Files_array[i].rootBlock = -1;
-            Files_array[i].attrType1 = '/0';
-            Files_array[i].attrType2 = '/0';
-            Files_array[i].attrLength = -1;
-            Files_array[i].attrLength = -1;
+            Files_array[i].attrType1 = 'l';
+            Files_array[i].attrType2 = 'l';
+            Files_array[i].attrLength1 = -1;
+            Files_array[i].attrLength2 = -1;
             flag = 1;
         }
     }
@@ -313,7 +313,7 @@ int AM_CloseIndex (int fileDesc) {
  */
 int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
     int flag = 0;
-    for(int i = 0; i< MAX_OPENED_FILES; i++){
+    for(int i = 0; i< MAX_OPEN_FILES; i++){
         if(Files_array[i].fileDesc == fileDesc){
             int root = Files_array[i].rootBlock;
             char attrType1 = Files_array[i].attrType1;
@@ -325,7 +325,7 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
             int result = insertEntry(fileDesc, root, value1, value2, newchildentry);
 
             if(result != 1){
-                AM_errno = AM_INSERT_ERROR;
+                AM_errno = AME_INSERT_ERROR;
                 AM_PrintError("Error while inserting an entry.");
                 exit(AM_errno);
             }
@@ -334,11 +334,16 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
         }
     }
     if(flag == 0){
-        AM_errno = AM_FILEDESC_NOT_FOUND;
+        AM_errno = AME_FILE_DESC_NOT_FOUND;
         AM_PrintError("Error while inserting an entry.");
         exit(AM_errno);
     }
   return AME_OK;
+}
+
+int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void *newChildEntry){
+
+    return AME_OK;
 }
 
 /**

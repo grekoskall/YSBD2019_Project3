@@ -68,6 +68,7 @@ int AM_InsertEntry(
   void *value2 /* τιμή του δεύτερου πεδίου της εγγραφής προς εισαγωγή */
 );
 
+int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void* newChildEntry);
 
 int AM_OpenIndexScan(
   int fileDesc, /* αριθμός που αντιστοιχεί στο ανοιχτό αρχείο */
