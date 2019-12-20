@@ -25,6 +25,11 @@ struct scan_info{
 struct file_info Files_array[MAX_OPEN_FILES];
 struct scan_info Scans_array[MAX_OPEN_SCANS];
 
+int file = -1;
+
+int node_offset = sizeof(char)+sizeof(int);
+int leaf_offset = sizeof(char)+sizeof(int)*3;
+
 /**
  * AM_Init()
  *  returns: nothing
@@ -316,13 +321,70 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
     for(int i = 0; i< MAX_OPEN_FILES; i++){
         if(Files_array[i].fileDesc == fileDesc){
             int root = Files_array[i].rootBlock;
-            char attrType1 = Files_array[i].attrType1;
-            char attrType2 = Files_array[i].attrType2;
-            int attrLength1 = Files_array[i].attrLength1;
-            int attrLength2 = Files_array[i].attrLength2;
+            int max_entries = (BF_BLOCK_SIZE-leaf_offset)/(Files_array[i].attrLength1+Files_array[i].attrLength2+sizeof(int));
+            if(max_entries%2 == 1){
+                max_entries--;
+            }
+            //char attrType1 = Files_array[i].attrType1;
+            //char attrType2 = Files_array[i].attrType2;
+            //int attrLength1 = Files_array[i].attrLength1;
+            //int attrLength2 = Files_array[i].attrLength2;
+            
+            file = i;
+
+            int blocks_num;
+            BF_Block *block;
+            BF_Block_Init(&block);
+            char *data;
+
+            if(BF_GetBlockCounter(fileDesc, &blocks_num) != BF_OK){
+                AM_errno = AME_BLOCKS;
+                AM_PrintError("Error while getting block counter.");
+                exit(AM_errno);
+            }
+
+            if(blocks_num == 1){
+                /* In this case, this is the first entry inserted in the file.
+                 * We need to allocate a new block, which will be a root as well as a leaf node.
+                 */
+                if(BF_AllocateBlock(fileDesc, block) != BF_OK){
+                    AM_errno = AME_ALLOCATE;
+                    AM_PrintError("Error while allocating a block.");
+                    exit(AM_errno);
+                }
+                char type = 'o';
+                int entries = 1;
+                int next_leaf = -1;
+                int prev_leaf = -1;
+                int entry_offset = -1;
+
+                data = BF_Block_GetData(block);
+                memcpy(data, &type, sizeof(char));
+                memcpy(data+sizeof(char), &entries, sizeof(int));
+                memcpy(data+sizeof(char)+sizeof(int), &next_leaf, sizeof(int));
+                memcpy(data+sizeof(char)+sizeof(int)*2, &prev_leaf, sizeof(int));
+
+                for(int i = 0; i < max_entries; i++){
+                    memcpy(data+leaf_offset+i*sizeof(int), &entry_offset, sizeof(int));
+                }
+
+                memcpy(data+leaf_offset+max_entries*sizeof(int), value1, Files_array[i].attrLength1);
+                memcpy(data+leaf_offset+max_entries*sizeof(int)+Files_array[i].attrLength1, value2, Files_array[i].attrLength2);
+
+                entry_offset = leaf_offset+max_entries*sizeof(int);
+                memcpy(data+leaf_offset, &entry_offset, sizeof(int));
+
+                BF_Block_SetDirty(block);
+                if(BF_UnpinBlock(block) != BF_OK){
+                    AM_errno = AME_UNPIN;
+                    AM_PrintError("Error while unpining a block.");
+                    exit(AM_errno);
+                }
+                return AME_OK;
+            }
 
             void *newchildentry = NULL;
-            int result = insertEntry(fileDesc, root, value1, value2, newchildentry);
+            int result = insertEntry(file, root, value1, value2, newchildentry);
 
             if(result != 1){
                 AM_errno = AME_INSERT_ERROR;
@@ -341,8 +403,115 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
   return AME_OK;
 }
 
-int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void *newChildEntry){
+int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void *newchildentry){
+    int blocks_num;
+    int entry_size = Files_array[fileIndex].attrLength1+Files_array[fileIndex].attrLength2;
+    int max_entries = (BF_BLOCK_SIZE-leaf_offset)/(Files_array[fileIndex].attrLength1+Files_array[fileIndex].attrLength2+sizeof(int));
+    if(max_entries%2 == 1){
+        max_entries--;
+    }
+    d = max_entries/2;
 
+    BF_Block *block;
+    BF_Block_Init(&block);
+    char *data;
+
+    if(BF_GetBlock(Files_array[fileIndex].fileDesc, nodePointer, block) != BF_OK){
+        AM_errno = AME_GETBLOCK;
+        AM_PrintError("Error while getting a block.");
+        exit(AM_errno);
+    }
+
+    data =  BF_Block_GetData(block);
+    char type;
+    int entries;
+
+    memcpy(&type, data, sizeof(char));
+    memcpy(&entries, data+sizeof(char), sizeof(int));
+
+    if(type == 'o' || type == 'l'){
+        if(entries >= max_entries){
+            /* There is no space in this leaf node (L)
+             * Split L: first d entries stay, rest move to brand new node L2
+             */
+
+            if(Files_array[fileIndex].attrType1 == 'i'){
+                int entries_array[entries+1];
+
+                for(int i = 0; i < entries; i++){
+                    //memcpy(&entries_array[i], data+leaf_offset+entry_size*i, sizeof(int));
+                }
+            }
+        } else {
+            /* L has space, put entry on it, set newChildEntry to NULL and return */
+            int entry_position = leaf_offset+max_entries+sizeof(int)+entries*(entry_size);
+            memcpy(data+entry_position, value1, Files_array[fileIndex].attrLength1);
+            memcpy(data+entry_position+Files_array[fileIndex].attrLength1, value2, Files_array[fileIndex].attrLength2);
+            entries++;
+            memcpy(data+sizeof(char), &entries, sizeof(int));
+
+            int i = 0;
+            int flag = -1;
+            
+            while(flag == -1 && i < entries-1){
+                void *value = malloc(Files_array[fileIndex].attrLength1);
+            
+                memcpy(value, data+leaf_offset+max_entries*sizeof(int)+entry_size*i, Files_array[fileIndex].attrLength1);
+
+                if( (int)*value1 < (int)*value ){
+                    flag = 0;
+                    break;
+                }
+                i++;
+            }
+            if(flag == -1){
+                memcpy(data+leaf_offset+(entries-1)*sizeof(int), &entry_position, sizeof(int));
+            } else {
+                int temp_this, temp_next;
+                memcpy(&temp_this, data+leaf_offset+(i)*sizeof(int), sizeof(int));
+                memcpy(&temp_next, data+leaf_offset+(i+1)*sizeof(int), sizeof(int));
+
+                for(int j = i+1; j < entries-1; j++){
+                    memcpy(data+leaf_offset+j*sizeof(int), &temp_this, sizeof(int));
+                    temp_this = temp_next;
+                    memcpy(&temp_next, data+leaf_offset+(j+1)*sizeof(int), sizeof(int));
+                }
+                memcpy(data+leaf_offset+i*sizeof(int), &entry_position, sizeof(int));
+            }
+        }
+    }
+/*
+    if(type == 'l'){
+        if(space-record_size >= 0){
+            //Put entry in it, set newChildEntry to NULL and return.
+        } else {
+            //Split: First d entries stay, rest move to brand new node.
+        }
+    }
+
+    if(type == 'n'){
+        //Find i(position) that K(i) <= entry's key value < K(i+1)
+        insert(fileIndex, position, value1, value2, newChildEntry);
+        if(newChildEntry == NULL){
+            return AME_OK;
+        } else {
+            //We spit child, must insert *newChildEntry in N
+            if(space-Files_array[fileIndex].attrLength1 >= 0){
+                //insert the newChildEntry on it, set newChildEntry to NULL and return.
+                *newChildEntry = NULL;
+                return AME_OK;
+            } else {
+                //Split N: first d key values and d+1 nodepointers stay, last d keys and d+1 nodepointers move to new node
+
+                if(position == Files_array[fileIndex].rootBlock){
+                    //create new node with <pointer to N, *newChildEntry>
+                    //make the tree's root node pointer point to the new node.
+                    return AME_OK;
+                }
+            }
+        }
+    }
+    */
     return AME_OK;
 }
 
