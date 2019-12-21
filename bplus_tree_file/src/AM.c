@@ -406,6 +406,7 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
 int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void *newchildentry){
     int blocks_num;
     int entry_size = Files_array[fileIndex].attrLength1+Files_array[fileIndex].attrLength2;
+    int node_entry_size = sizeof(int)*2+Files_array[fileIndex].attrLength1;
     int max_entries = (BF_BLOCK_SIZE-leaf_offset)/(Files_array[fileIndex].attrLength1+Files_array[fileIndex].attrLength2+sizeof(int));
     if(max_entries%2 == 1){
         max_entries--;
@@ -478,7 +479,17 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
             }
 
             void *value = malloc(Files_array[fileIndex].attrLength1);
+            int first_entry_position = leaf_offset + sizeof(int)*max_entries;
+            mempcy(value, sata+first_entry_position, Files_array[fileIndex].attrLength1);
 
+            int node;
+            if ( *(int*)value1 < *(int*)value ){
+                node = nodePointer;
+            } else {
+                node = new_leaf_id;
+            }
+
+            free(value);
             BF_Block_SetDirty(block);
             BF_Block_SetDirty(new_block_leaf);
             if(BF_UnpinBlock(block) != BF_OK){
@@ -492,22 +503,52 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                 exit(AM_errno);
             }
 
-            int result = insertEntry(fileIndex, , value1, value2, newchildentry);
+            int result = insertEntry(fileIndex, node, value1, value2, newchildentry);
 
+            newchildentry = malloc(sizeof(int)+Files_array[fileIndex].attrType1);
+            if(BF_GetBlock(Files_array[fileIndex].fileDesc, new_leaf_id, block) != BF_OK){
+                AM_errno = AME_GETBLOCK;
+                AM_PrintError("Error while getting a block.");
+                exit(AM_errno);
+            }
+            data = BF_Block_GetData(block);
+            int first_entry_position;
+            memcpy(first_entry_position, data+leaf_offset, sizeof(int));
+            memcpy(newchildentry, data+first_entry_position, Files_array[fileIndex].attrType1);
+            memcpy(newchildentry+Files_array[fileIndex].attrType1, &new_leaf_id, sizeof(int));
+            if(BF_UnpinBlock(block) != BF_OK){
+                AM_errno = AME_UNPIN;
+                AM_PrintError("Error while unpinning a block.");
+                exit(AM_errno);
+            }
             if(result != 1){
                 AM_errno = AME_INSERT_ERROR;
                 AM_PrintError("Error while inserting an entry.");
                 exit(AM_errno);
             }
 
-
-            if(Files_array[fileIndex].attrType1 == 'i'){
-                int entries_array[entries+1];
-
-                for(int i = 0; i < entries; i++){
-                    //memcpy(&entries_array[i], data+leaf_offset+entry_size*i, sizeof(int));
+            if(type == 'o'){
+                /* The leaf-node was also a root node, so a new root node must be made, this time it will never be a leaf-node again */
+                int entries = 1;
+                if(BF_AllocateBlock(Files_array[fileIndex].fileDesc, block) != BF_OK){
+                    AM_errno = AME_ALLOCATE;
+                    AM_PrintError("Error while allocating a block.");
+                    exit(AM_errno);
+                }
+                data = BF_Block_GetData(block);
+                memcpy(data, &type, sizeof(char));
+                memcpy(data+sizeof(char), &entries, sizeof(int));
+                memcpy(data+node_offset, &nodePointer, sizeof(int));
+                memcpy(data+node_offset+sizeof(int), value, Files_array[fileIndex].attrLength1);
+                memcpy(data+node_offset+sizeof(int)+Files_array[fileIndex].attrLength1, &new_leaf_id, sizeof(int));
+                BF_Block_SetDirty(block);
+                if(BF_UnpinBlock(block) != BF_OK){
+                    AM_errno = AME_UNPIN;
+                    AM_PrintError("Error while unpinning a block.");
+                    exit(AM_errno);
                 }
             }
+            return 1;
         } else {
             /* L has space, put entry on it, set newChildEntry to NULL and return */
             int entry_position = leaf_offset + max_entries*sizeof(int) + entries*entry_size;
@@ -553,49 +594,188 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                 }
                 memcpy(data+leaf_offset+i*sizeof(int), &entry_position, sizeof(int));
             }
-            newChildEntry = NULL;
+            newchildentry = NULL;
             BF_Block_SetDirty(block);
             if(BF_UnpinBlock(block) != BF_OK){
                 AM_errno = AME_UNPIN;
                 AM_PrintError("Error while unpining a block.");
                 exit(AM_errno);
             }
-            return AME_OK;
+            return 1;
 
         }
-    }
-/*
-    if(type == 'l'){
-        if(space-record_size >= 0){
-            //Put entry in it, set newChildEntry to NULL and return.
-        } else {
-            //Split: First d entries stay, rest move to brand new node.
+    } else if ( type == 'r' || type == 'n' ){
+        int next_node;
+        for(int i = 0; i < entries; i++){
+            void *left_value = malloc(Files_array[fileIndex].attrLength1);
+            void *right_value = malloc(Files_array[fileIndex].attrLength1);
+
+            int node_entry_size = sizeof(int)+Files_array[fileIndex].attrLength1;
+            memcpy(&next_node, data+node_offset+entry_size*i, sizeof(int));
+            memcpy(left_value, data+node_offset+sizeof(int)+node_entry_size*i, Files_array[fileIndex].attrLength1);
+            memcpy(right_value, data+node_offset+sizeof(int)+node_entry_size*(i+1), Files_array[fileIndex].attrLength1);
+            if( (*(int*)left_value <= *(int*)value1) && (*(int*)right_value > *(int*)value1)){
+                break;
+            }
         }
-    }
-
-    if(type == 'n'){
-        //Find i(position) that K(i) <= entry's key value < K(i+1)
-        insert(fileIndex, position, value1, value2, newChildEntry);
-        if(newChildEntry == NULL){
-            return AME_OK;
+        if(next_node == 0){
+            AM_errno = AME_ERROR;
+            AM_PrintError("Error while finding node for the key value.");
+            exit(AM_errno);
+        }
+        int result = insertEntry(fileIndex, next_node, value1, value2, newchildentry);
+        if(newchildentry == NULL){
+            return 1;
         } else {
-            //We spit child, must insert *newChildEntry in N
-            if(space-Files_array[fileIndex].attrLength1 >= 0){
-                //insert the newChildEntry on it, set newChildEntry to NULL and return.
-                *newChildEntry = NULL;
-                return AME_OK;
-            } else {
-                //Split N: first d key values and d+1 nodepointers stay, last d keys and d+1 nodepointers move to new node
+            if(entries == max_entries){
+                /* Split N: 2d+1 key values and 2d+2 nodepointers.
+                 *  First d key values and d+1 pointers stay.
+                 *  Last d keys and d+1 pointers move to new node N2
+                 */
+                BF_Block *new_block_node;
+                BF_Block_Init(&new_block_node);
+                char *sata;
+                
+                void *value = malloc(Files_array[fileIndex].attrLength1);
+                void *new_value = malloc(Files_array[fileIndex].attrLength1);
 
-                if(position == Files_array[fileIndex].rootBlock){
-                    //create new node with <pointer to N, *newChildEntry>
-                    //make the tree's root node pointer point to the new node.
-                    return AME_OK;
+                int new_entries = d;
+                memcpy(data+sizeof(char), &new_entries, sizeof(int));
+
+                int new_node_id;
+                if(BF_GetBlockCounter(Files_array[fileIndex].fileDesc, &new_node_id) != BF_OK){
+                    AM_errno = AME_BLOCKS;
+                    AM_PrintError("Error while getting the number of blocks.");
+                    exit(AM_errno);
                 }
+                if(BF_AllocateBlock(Files_array[fileIndex].fileDesc, new_block_node) != BF_OK){
+                    AM_errno = AME_BLOCKS;
+                    AM_PrintError("Error while allocating a block.");
+                    exit(AM_errno);
+                }
+                char new_type = 'n';
+                sata = BF_Block_GetData(new_block_node);
+                memcpy(sata, &new_type, sizeof(char));
+                memcpy(sata+sizeof(char), &new_entries, sizeof(int));
+
+                for(int i = 0; i < d; i++){
+                    memcpy(sata+node_offset+node_entry_size*i, data+node_offset+sizeof(int)+node_entry_size*(d+i), node_entry_size);
+                }
+
+                memcpy(value, sata+node_offset, Files_array[fileIndex].attrLength1);
+                memcpy(new_value, newchildentry, Files_array[fileIndex].attrLength1);
+
+                int node;
+                if( *(int*)value < *(int*)new_value){
+                    node = nodePointer;
+                } else {
+                    node = new_block_id;
+                }
+
+                int result = insertEntry(fileIndex, node, value1, value2, newchildentry);
+                if(result != 1){
+                    AM_errno = AME_INSERT_ERROR;
+                    AM_PrintError("Error while inserting an entry.");
+                    exit(AM_errno);
+                }
+
+                BF_Block_SetDirty(block);
+                BF_Block_SetDirty(new_block_node);
+                if(BF_UnpinBlock(block) != BF_OK){
+                    AM_errno = AME_UNPIN;
+                    AM_PrintError("Error while unpinning a block.");
+                    exit(AM_errno);
+                }
+                if(BF_UnpinBlock(new_block_node) != BF_OK){
+                    AM_errno = AME_UNPIN;
+                    AM_PrintError("Error while unpinning a block.");
+                    exit(AM_errno);
+                }
+
+                if(type == 'r'){
+                    /* Root was split */
+                    int root_block_number;
+                    if(BF_GetBlockCounter(Files_array[fileIndex].fileDesc, &root_block_number) != BF_OK){
+                        AM_errno = AME_BLOCKS;
+                        AM_PrintError("Error while getting the number of blocks.");
+                        exit(AM_errno);
+                    }
+                    if(BF_AllocateBlock(Files_array[fileIndex].fileDesc, block) != BF_OK){
+                        AM_errno = AME_ALLOCATE;
+                        AM_PrintError("Error while allocating a block.");
+                        exit(AM_errno);
+                    }
+                    int entries = 1;
+                    data = BF_Block_GetData(block);
+                    memcpy(data, &type, sizeof(char));
+                    memcpy(data+sizeof(char), &entries, sizeof(int));
+                    memcpy(data+node_offset, &nodePointer, sizeof(int));
+                    memcpy(data+node_offset+sizeof(int), newchildentry, Files_array[fileIndex].attrLenght1);
+                    memcpy(data+node_offset+sizeof(int)+Files_array[fileIndex].attrLength1, new_block_id, sizeof(int));
+                    BF_Block_SetDirty(block);
+                    if(BF_UnpinBlock(block) != BF_OK){
+                        AM_errno = AME_UNPIN;
+                        AM_PrintError("Error while unpinning a block.");
+                        exit(AM_errno);
+                    }
+                    Files_array[fileIndex].rootBlock = root_block_number;
+
+                    if(BF_GetBlock(Files_array[fileIndex].fileDesc, 0, block) != BF_OK){
+                        AM_errno = AME_UNPIN;
+                        AM_PrintError("Error while getting a block.");
+                        exit(AM_errno);
+                    }
+                    data = BF_Block_GetData(block);
+                    memcpy(data+sizeof(char)*3+sizeof(int)*2, &root_block_number, sizeof(int));
+                    BF_Block_SetDirty(block);
+                    if(BF_UnpinBlock(block) != BF_OK){
+                        AM_errno = AME_UNPIN;
+                        AM_PrintError("Error while unpinning a block.");
+                        exit(AM_errno);
+                    }
+                }
+            } else {
+                int left_block;
+                int right_block;
+                void *value = malloc(Files_array[fileIndex].attrLength1);
+                void *child_value = malloc(Files_array[fileIndex].attrLength1);
+
+                memcpy(child_value, newchildentry, Files_array[fileIndex].attrLength1);
+
+                for(int i = 0 ; i < entries ; i++){
+                    memcpy(&left_block, data+node_offset+node_entry_size*i, sizeof(int));
+                    memcpy(value, data+node_offset+sizeof(int)+node_entry_size*i, Files_array[fileIndex].attrLength1);
+                    memcpy(&right_block, data+node_offset+node_entry_size*i+sizeof(int)+Files_array[fileIndex].attrLength1, sizeof(int));
+
+                    if(*(int*)value > *(int*)child_value){
+                        break;
+                    }
+                }
+
+                void *this_entry = malloc(node_entry_size);
+                void *next_entry = malloc(node_entry_size);
+                memcpy(this_entry, data+node_offset+sizeof(int)+node_entry_size*i, node_entry_size);
+                memcpy(next_entry, data+node_offset+sizeof(int)+node_entry_size*(i+1), node_entry_size);
+
+                for(int j = i+1; j < entries; j++){
+                    memcpy(data+node_offset+sizeof(int)+node_entry_size*j, this_entry, node_entry_size);
+                    this_entry = next_entry;
+                    memcpy(next_entry, data+node_offset+sizeof(int)+node_entry_size*(j+1), node_entry_size);
+                }
+
+                memcpy(data+node_offset+sizeof(int)+node_entry_size*i, newchildentry, node_entry_size);
+                BF_Block_SetDirty(block);
+                if(BF_UnpinBlock(block) != BF_OK){
+                    AM_errno = AME_UNPIN;
+                    AM_PrintError("Error while unpinning a block.");
+                    exit(AM_errno);
+                }
+                newchildentry = NULL;
+                return 1;
             }
         }
     }
-    */
+
     return AME_OK;
 }
 
