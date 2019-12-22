@@ -368,6 +368,7 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
         memcpy(data+sizeof(char)+sizeof(int), &next_leaf, sizeof(int));
         memcpy(data+sizeof(char)+sizeof(int)*2, &prev_leaf, sizeof(int));
 
+        int entry_offset = -1; 
         for(int i = 0; i < max_entries; i++){
             memcpy(data+leaf_offset+i*sizeof(int), &entry_offset, sizeof(int));
         }
@@ -375,7 +376,7 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
         memcpy(data+leaf_offset+max_entries*sizeof(int), value1, attrLength1);
         memcpy(data+leaf_offset+max_entries*sizeof(int)+attrLength1, value2, attrLength2);
 
-        int entry_offset = leaf_offset+max_entries*sizeof(int);
+        entry_offset = leaf_offset+max_entries*sizeof(int);
         memcpy(data+leaf_offset, &entry_offset, sizeof(int));
 
         BF_Block_SetDirty(block);
@@ -387,7 +388,7 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
         /* If the B+Tree has already been built, then use a recursive insertEntry */
         void *newchildentry = NULL;
         int result = insertEntry(fileDesc, root, value1, value2, newchildentry);
-        if(result != 1){
+        if(result != 0){
             AM_errno = AME_INSERT_ERROR;
             return AM_errno;
         }
@@ -397,24 +398,29 @@ int AM_InsertEntry(int fileDesc, void *value1, void *value2) {
 }
 
 /**
- * insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void *newchildentry)
- *  returns: 1 - if it runs correctly, Some error code - if it has an error.
+ * insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void *newchildentry)
+ *  returns: 0 - if it runs correctly, Some error code - if it has an error.
  *
  *  This is the recursive insert entry that follows the path from the root down to the leaf that the entry needs to be placed.
  *  Then it inserts the entry if there is space, or it splits the leaf into two leafs with equal number of entries, and recursively sends 
  *  the key of the entry to be inserted to the parent node(which may need to be splitted).
  *
- *  fileIndex - holds the index of the Files_array in which the file that the insert will take place is.
+ *  fileDesc - holds the index of the Files_array in which the file that the insert will take place is.
  *  nodePointer - holds the number of the node/block that the insertion will take place.
  *  newchildentry - is NULL except for the case that there was a split, and it holds the pair <key-value, block-number> that will be inserted to the node parent.
  *                  key-value is the first value of the new block that was created due to the split.
  *                  block-number is the number of the new block that holds the splitted entries.
  */
-int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void *newchildentry){
+int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void *newchildentry){
+    int root = Files_array[fileDesc].rootBlock;
+    int attrLength1 = Files_array[fileDesc].attrLength1, attrLength2 = Files_array[fileDesc].attrLength2;
+    char attrType1 = Files_array[fileDesc].attrType1, attrType2 = Files_array[fileDesc].attrType2;
+    int file_id = Files_array[fileDesc].fileDesc;
+
     int blocks_num;
-    int entry_size = Files_array[fileIndex].attrLength1+Files_array[fileIndex].attrLength2;
-    int node_entry_size = sizeof(int)*2+Files_array[fileIndex].attrLength1;
-    int max_entries = (BF_BLOCK_SIZE-leaf_offset)/(Files_array[fileIndex].attrLength1+Files_array[fileIndex].attrLength2+sizeof(int));
+    int entry_size = attrLength1+attrLength2;
+    int node_entry_size = sizeof(int)+attrLength1;
+    int max_entries = (BF_BLOCK_SIZE-leaf_offset)/(attrLength1+attrLength2+sizeof(int));
     if(max_entries%2 == 1){
         max_entries--;
     }
@@ -424,19 +430,19 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
     BF_Block_Init(&block);
     char *data;
 
-    if(BF_GetBlock(Files_array[fileIndex].fileDesc, nodePointer, block) != BF_OK){
+    if(BF_GetBlock(file_id, nodePointer, block) != BF_OK){
         AM_errno = AME_GETBLOCK;
         return AM_errno;
     }
-
     data =  BF_Block_GetData(block);
+
     char type;
     int entries;
-
     memcpy(&type, data, sizeof(char));
     memcpy(&entries, data+sizeof(char), sizeof(int));
 
     if(type == 'o' || type == 'l'){
+        /* In this case the block is always a leaf node, either a root or a plain leaf */
         if(entries == max_entries){
             /* There is no space in this leaf node (L)
              * Split L: first d entries stay, rest move to brand new node L2
@@ -444,33 +450,33 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
             int next_leaf_id;
             memcpy(&next_leaf_id, data+sizeof(char)+sizeof(int), sizeof(int));
 
-            char new_type = 'l'; 
+            char new_type = 'l';
             if(type == 'o'){
                 /* The root node becomes a leaf node */
                 memcpy(data, &new_type, sizeof(char));
             }
-            int new_entries_number = d;
-            memcpy(data+sizeof(char), &new_entries_number, sizeof(int));
+            memcpy(data+sizeof(char), &d, sizeof(int));
 
             BF_Block *new_block_leaf;
             BF_Block_Init(&new_block_leaf);
             char *sata;
 
             int new_leaf_id;
-            if(BF_GetBlockCounter(Files_array[fileIndex].fileDesc, &new_leaf_id) != BF_OK){
+            if(BF_GetBlockCounter(file_id, &new_leaf_id) != BF_OK){
                 AM_errno = AME_BLOCKS;
                 return AM_errno;
             }
             /* Set the next_leaf 'pointer' of the first leaf node to 'point' to the new leaf node. */
             memcpy(data+sizeof(char)+sizeof(int), &new_leaf_id, sizeof(int));
 
-            if(BF_AllocateBlock(Files_array[fileIndex].fileDesc, new_block_leaf) != BF_OK){
+            if(BF_AllocateBlock(file_id, new_block_leaf) != BF_OK){
                 AM_errno = AME_ALLOCATE;
                 return AM_errno;
             }
             sata = BF_Block_GetData(new_block_leaf);
+
             memcpy(sata, &new_type, sizeof(char));
-            memcpy(sata+sizeof(char), &new_entries_number, sizeof(int));
+            memcpy(sata+sizeof(char), &d, sizeof(int));
             memcpy(sata+sizeof(char)+sizeof(int), &next_leaf_id, sizeof(int));
             memcpy(sata+sizeof(char)+sizeof(int)*2, &nodePointer, sizeof(int));
 
@@ -482,9 +488,9 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                 memcpy(sata+new_entry_position, data+previous_entry_position, entry_size);
             }
 
-            void *value = malloc(Files_array[fileIndex].attrLength1);
+            void *value = malloc(attrLength1);
             int first_entry_position = leaf_offset + sizeof(int)*max_entries;
-            memcpy(value, sata+first_entry_position, Files_array[fileIndex].attrLength1);
+            memcpy(value, sata+first_entry_position, attrLength1);
 
             int node;
             if ( *(int*)value1 < *(int*)value ){
@@ -492,8 +498,7 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
             } else {
                 node = new_leaf_id;
             }
-
-            free(value);
+   
             BF_Block_SetDirty(block);
             BF_Block_SetDirty(new_block_leaf);
             if(BF_UnpinBlock(block) != BF_OK){
@@ -505,30 +510,18 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                 return AM_errno;
             }
 
-            int result = insertEntry(fileIndex, node, value1, value2, newchildentry);
-
-            newchildentry = malloc(sizeof(int)+Files_array[fileIndex].attrType1);
-            if(BF_GetBlock(Files_array[fileIndex].fileDesc, new_leaf_id, block) != BF_OK){
-                AM_errno = AME_GETBLOCK;
-                return AM_errno;
-            }
-            data = BF_Block_GetData(block);
-            memcpy(&first_entry_position, data+leaf_offset, sizeof(int));
-            memcpy(newchildentry, data+first_entry_position, Files_array[fileIndex].attrType1);
-            memcpy(newchildentry+Files_array[fileIndex].attrType1, &new_leaf_id, sizeof(int));
-            if(BF_UnpinBlock(block) != BF_OK){
-                AM_errno = AME_UNPIN;
-                return AM_errno;
-            }
+            int result = insertEntry(fileDesc, node, value1, value2, newchildentry);
             if(result != 1){
                 AM_errno = AME_INSERT_ERROR;
                 return AM_errno;
             }
+            
+            free(value);
 
             if(type == 'o'){
                 /* The leaf-node was also a root node, so a new root node must be made, this time it will never be a leaf-node again */
                 int entries = 1;
-                if(BF_AllocateBlock(Files_array[fileIndex].fileDesc, block) != BF_OK){
+                if(BF_AllocateBlock(file_id, block) != BF_OK){
                     AM_errno = AME_ALLOCATE;
                     return AM_errno;
                 }
@@ -536,32 +529,49 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                 memcpy(data, &type, sizeof(char));
                 memcpy(data+sizeof(char), &entries, sizeof(int));
                 memcpy(data+node_offset, &nodePointer, sizeof(int));
-                memcpy(data+node_offset+sizeof(int), value, Files_array[fileIndex].attrLength1);
-                memcpy(data+node_offset+sizeof(int)+Files_array[fileIndex].attrLength1, &new_leaf_id, sizeof(int));
+                memcpy(data+node_offset+sizeof(int), value1, attrLength1);
+                memcpy(data+node_offset+sizeof(int)+attrLength1, &new_leaf_id, sizeof(int));
                 BF_Block_SetDirty(block);
                 if(BF_UnpinBlock(block) != BF_OK){
                     AM_errno = AME_UNPIN;
                     return AM_errno;
                 }
             }
-            return 1;
+
+            newchildentry = malloc(sizeof(int)+attrLength1);
+            if(BF_GetBlock(file_id, new_leaf_id, block) != BF_OK){
+                AM_errno = AME_GETBLOCK;
+                return AM_errno;
+            }
+
+            data = BF_Block_GetData(block);
+            memcpy(&first_entry_position, data+leaf_offset, sizeof(int));
+            memcpy(newchildentry, data+first_entry_position, attrLength1);
+            memcpy(newchildentry+attrType1, &new_leaf_id, sizeof(int));
+            if(BF_UnpinBlock(block) != BF_OK){
+                AM_errno = AME_UNPIN;
+                return AM_errno;
+            }
+           return 0;
         } else {
-            /* L has space, put entry on it, set newChildEntry to NULL and return */
+            /* L has space, put entry on it, set newChildEntry to NULL and return
+             * The entry will be placed after the last entry of the leaf node, and the array with the positions of the ascending order of the entries will be updated.
+             */
             int entry_position = leaf_offset + max_entries*sizeof(int) + entries*entry_size;
-            memcpy(data+entry_position, value1, Files_array[fileIndex].attrLength1);
-            int second_field_position = entry_position+Files_array[fileIndex].attrLength1;
-            memcpy(data+second_field_position, value2, Files_array[fileIndex].attrLength2);
+            memcpy(data+entry_position, value1, attrLength1);
+            int second_field_position = entry_position+attrLength1;
+            memcpy(data+second_field_position, value2, attrLength2);
             entries++;
             memcpy(data+sizeof(char), &entries, sizeof(int));
 
             int i = 0;
             int flag = -1;
+            void *value = malloc(attrLength1);
             
             while(flag == -1 && i < entries-1){
-                void *value = malloc(Files_array[fileIndex].attrLength1);
-            
+                /* Find the position (i) of the array which holds the value that is bigger than the new value inserted. */
                 int test_entry_position = leaf_offset + max_entries*sizeof(int) + entry_size*i;
-                memcpy(value, data+test_entry_position, Files_array[fileIndex].attrLength1);
+                memcpy(value, data+test_entry_position, attrLength1);
 
                 if( *(int*)value1 < *(int*)value ){
                     flag = 0;
@@ -571,7 +581,8 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
             }
 
             if(flag == -1){
-                /* Place the new entry_position to the last entry of the array */
+                /* The new value inserted is the biggest of the entries in the leaf node.
+                 * Place the new entry_position to the last entry of the array */
                 int entry_in_array_position = leaf_offset + (entries-1)*sizeof(int);
                 memcpy(data+entry_in_array_position, &entry_position, sizeof(int));
             } else {
@@ -590,26 +601,30 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                 }
                 memcpy(data+leaf_offset+i*sizeof(int), &entry_position, sizeof(int));
             }
+            free(newchildentry);
             newchildentry = NULL;
             BF_Block_SetDirty(block);
             if(BF_UnpinBlock(block) != BF_OK){
                 AM_errno = AME_UNPIN;
                 return AM_errno;
             }
-            return 1;
-
+            return 0;
         }
     } else if ( type == 'r' || type == 'n' ){
+        /* In this case the node was an internal node, either a root or a plain node. 
+         * We need to find the leaf node in which the new value has to be inserted.
+         */
         int next_node;
         for(int i = 0; i < entries; i++){
-            void *left_value = malloc(Files_array[fileIndex].attrLength1);
-            void *right_value = malloc(Files_array[fileIndex].attrLength1);
+            void *left_value = malloc(attrLength1);
+            void *right_value = malloc(attrLength1);
+            int node_entry_size = sizeof(int)+attrLength1;
 
-            int node_entry_size = sizeof(int)+Files_array[fileIndex].attrLength1;
             memcpy(&next_node, data+node_offset+entry_size*i, sizeof(int));
-            memcpy(left_value, data+node_offset+sizeof(int)+node_entry_size*i, Files_array[fileIndex].attrLength1);
-            memcpy(right_value, data+node_offset+sizeof(int)+node_entry_size*(i+1), Files_array[fileIndex].attrLength1);
+            memcpy(left_value, data+node_offset+sizeof(int)+node_entry_size*i, attrLength1);
+            memcpy(right_value, data+node_offset+sizeof(int)+node_entry_size*(i+1), attrLength1);
             if( (*(int*)left_value <= *(int*)value1) && (*(int*)right_value > *(int*)value1)){
+                /* If the value is between the left_value and the right_value then we have found our node */
                 break;
             }
         }
@@ -617,55 +632,69 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
             AM_errno = AME_ERROR;
             return AM_errno;
         }
-        int result = insertEntry(fileIndex, next_node, value1, value2, newchildentry);
+       
         if(newchildentry == NULL){
-            return 1;
+            /* If the newchildentry is NULL then the insertion was finished without splitting
+             * and we need to go down to insert to the next node.*/
+            int result = insertEntry(fileDesc, next_node, value1, value2, newchildentry);
+            if(result != 1){
+                AM_errno = AME_INSERT_ERROR;
+                return AM_errno;
+            }
+            return 0;
         } else {
+            /* Else the previous insertion splitted the node and the newchildentry holds the following:
+             * <key-value, block_number> : key-value is the lower value of the new block that was created: block_number is the block number that holds that value.
+             * The new entry that has to be inserted in the internal node is the pair <key-value, block_number> so that the entries in the node are keeped in ascending order.
+             */
             if(entries == max_entries){
                 /* Split N: 2d+1 key values and 2d+2 nodepointers.
                  *  First d key values and d+1 pointers stay.
                  *  Last d keys and d+1 pointers move to new node N2
+                 * Then we add the newchildentry to the corrensponding node.
                  */
                 BF_Block *new_block_node;
                 BF_Block_Init(&new_block_node);
                 char *sata;
                 
-                void *value = malloc(Files_array[fileIndex].attrLength1);
-                void *new_value = malloc(Files_array[fileIndex].attrLength1);
+                void *value = malloc(attrLength1);
+                void *new_value = malloc(attrLength1);
 
-                int new_entries = d;
-                memcpy(data+sizeof(char), &new_entries, sizeof(int));
+                memcpy(data+sizeof(char), &d, sizeof(int));
 
                 int new_node_id;
-                if(BF_GetBlockCounter(Files_array[fileIndex].fileDesc, &new_node_id) != BF_OK){
+                if(BF_GetBlockCounter(file_id, &new_node_id) != BF_OK){
                     AM_errno = AME_BLOCKS;
                     return AM_errno;
                 }
-                if(BF_AllocateBlock(Files_array[fileIndex].fileDesc, new_block_node) != BF_OK){
+                if(BF_AllocateBlock(file_id, new_block_node) != BF_OK){
                     AM_errno = AME_BLOCKS;
                     return AM_errno;
                 }
                 char new_type = 'n';
                 sata = BF_Block_GetData(new_block_node);
                 memcpy(sata, &new_type, sizeof(char));
-                memcpy(sata+sizeof(char), &new_entries, sizeof(int));
+                memcpy(sata+sizeof(char), &d, sizeof(int));
+                int first_pointer;
+                memcpy(&first_pointer, data+node_offset+node_entry_size*d, sizeof(int));
+                memcpy(sata+node_offset, &first_pointer, sizeof(int));
 
                 for(int i = 0; i < d; i++){
-                    memcpy(sata+node_offset+node_entry_size*i, data+node_offset+sizeof(int)+node_entry_size*(d+i), node_entry_size);
+                    memcpy(sata+node_offset+sizeof(int)+node_entry_size*i, data+node_offset+sizeof(int)+node_entry_size*(d+i), node_entry_size);
                 }
 
-                memcpy(value, sata+node_offset, Files_array[fileIndex].attrLength1);
-                memcpy(new_value, newchildentry, Files_array[fileIndex].attrLength1);
+                memcpy(value, sata+node_offset+sizeof(int), attrLength1);
+                memcpy(new_value, newchildentry, attrLength1);
 
                 int node;
-                if( *(int*)value < *(int*)new_value){
+                if( *(int*)new_value < *(int*)value){
                     node = nodePointer;
                 } else {
                     node = new_node_id;
                 }
 
-                int result = insertEntry(fileIndex, node, value1, value2, newchildentry);
-                if(result != 1){
+                int result = insertEntry(fileDesc, node, value1, value2, newchildentry);
+                if(result != 0){
                     AM_errno = AME_INSERT_ERROR;
                     return AM_errno;
                 }
@@ -684,11 +713,11 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                 if(type == 'r'){
                     /* Root was split */
                     int root_block_number;
-                    if(BF_GetBlockCounter(Files_array[fileIndex].fileDesc, &root_block_number) != BF_OK){
+                    if(BF_GetBlockCounter(file_id, &root_block_number) != BF_OK){
                         AM_errno = AME_BLOCKS;
                         return AM_errno;
                     }
-                    if(BF_AllocateBlock(Files_array[fileIndex].fileDesc, block) != BF_OK){
+                    if(BF_AllocateBlock(file_id, block) != BF_OK){
                         AM_errno = AME_ALLOCATE;
                         return AM_errno;
                     }
@@ -697,16 +726,16 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                     memcpy(data, &type, sizeof(char));
                     memcpy(data+sizeof(char), &entries, sizeof(int));
                     memcpy(data+node_offset, &nodePointer, sizeof(int));
-                    memcpy(data+node_offset+sizeof(int), newchildentry, Files_array[fileIndex].attrLength1);
-                    memcpy(data+node_offset+sizeof(int)+Files_array[fileIndex].attrLength1, &new_node_id, sizeof(int));
+                    memcpy(data+node_offset+sizeof(int), newchildentry, attrLength1);
+                    memcpy(data+node_offset+sizeof(int)+attrLength1, &new_node_id, sizeof(int));
                     BF_Block_SetDirty(block);
                     if(BF_UnpinBlock(block) != BF_OK){
                         AM_errno = AME_UNPIN;
                         return AM_errno;
                     }
-                    Files_array[fileIndex].rootBlock = root_block_number;
+                    Files_array[fileDesc].rootBlock = root_block_number;
 
-                    if(BF_GetBlock(Files_array[fileIndex].fileDesc, 0, block) != BF_OK){
+                    if(BF_GetBlock(file_id, 0, block) != BF_OK){
                         AM_errno = AME_UNPIN;
                         return AM_errno;
                     }
@@ -718,19 +747,21 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                         return AM_errno;
                     }
                 }
+                return 0;
             } else {
+                /* The internal node has space for the newchildentry to be added */
                 int left_block;
                 int right_block;
-                void *value = malloc(Files_array[fileIndex].attrLength1);
-                void *child_value = malloc(Files_array[fileIndex].attrLength1);
+                void *value = malloc(attrLength1);
+                void *child_value = malloc(attrLength1);
 
-                memcpy(child_value, newchildentry, Files_array[fileIndex].attrLength1);
+                memcpy(child_value, newchildentry, attrLength1);
 
                 int position;
                 for(int i = 0 ; i < entries ; i++){
                     memcpy(&left_block, data+node_offset+node_entry_size*i, sizeof(int));
-                    memcpy(value, data+node_offset+sizeof(int)+node_entry_size*i, Files_array[fileIndex].attrLength1);
-                    memcpy(&right_block, data+node_offset+node_entry_size*i+sizeof(int)+Files_array[fileIndex].attrLength1, sizeof(int));
+                    memcpy(value, data+node_offset+sizeof(int)+node_entry_size*i, attrLength1);
+                    memcpy(&right_block, data+node_offset+node_entry_size*i+sizeof(int)+attrLength1, sizeof(int));
 
                     if(*(int*)value > *(int*)child_value){
                         break;
@@ -755,13 +786,13 @@ int insertEntry(int fileIndex, int nodePointer, void *value1, void *value2, void
                     AM_errno = AME_UNPIN;
                     return AM_errno;
                 }
+                free(newchildentry);
                 newchildentry = NULL;
-                return 1;
+                return 0;
             }
         }
     }
-
-    return AME_OK;
+    return 0;
 }
 
 /**
