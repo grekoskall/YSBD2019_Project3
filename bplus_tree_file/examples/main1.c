@@ -24,18 +24,22 @@ void insertEntries(int eNentry, int eAentry, int eSentry, int eDentry,
 
 	strcpy(errStr, "Error in AM_InsertEntry");
 
+    printf("Time for the first insert.\n");
 	if (AM_InsertEntry(eNentry, (void *) ename, &recid) != AME_OK) {
 		sprintf(errStr, "Error in AM_InsertEntry called on %s \n", empName);
 		AM_PrintError(errStr);
 	}
+    printf("Time for the second insert.\n");
 	if (AM_InsertEntry(eAentry, (void *) &eage, ename) != AME_OK) {
 		sprintf(errStr, "Error in AM_InsertEntry called on %s \n", empAge);
 		AM_PrintError(errStr);
 	}
+    printf("Time for the third insert.\n");
 	if (AM_InsertEntry(eSentry, (void *) &esal, ename) != AME_OK) {
 		sprintf(errStr, "Error in AM_InsertEntry called on %s \n", empSal);
 		AM_PrintError(errStr);
 	}
+    printf("Time for the last insert.\n");
 	if (AM_InsertEntry(eDentry, (void *) edname, &esal) != AME_OK) {
 		sprintf(errStr, "Error in AM_InsertEntry called on %s \n", empDname);
 		AM_PrintError(errStr);
@@ -101,7 +105,9 @@ int main() {
 	if (AM_CreateIndex(fltname, FLOAT, 39, STRING, 39) != AME_OK) {
 		sprintf(errStr, "Expected error in AM_CreateIndex called on %s \n",
 				fltname);
+        //printf("create1\n");
 		AM_PrintError(errStr);
+        //printf("create2\n");
 	} else {
 		sprintf(errStr, "Creating %s index should have failed \n", fltname);
 		AM_PrintError(errStr);
@@ -110,7 +116,9 @@ int main() {
 	if (AM_CreateIndex(empDname, STRING, 10, FLOAT, sizeof(float)) != AME_OK) {
 		sprintf(errStr, "Error in AM_CreateIndex called on %s \n", empDname);
 		AM_PrintError(errStr);
-	}
+    }
+
+    //printf("Passed creating indexes.\n");
 
 	/********************************************************************************
 	 *  ¶νοιγμα των τεσσάρων ΑΚ (με σκοπό την εισαγωγή εγγραφών)                    *
@@ -136,6 +144,7 @@ int main() {
 		AM_PrintError(errStr);
 	}
 
+    //printf("Passed opening indexes.\n");
 	/********************************************************************************
 	 *  Εισαγωγή των δυάδων (τιμή1, τιμή2) στα ΑΚ. Υπάρχουν 100 συνολικά εισαγωγές    *
 	 *  σε κάθε αρχείο, οι οποίες διαχωρίζονται με παύλες για δική σας ευκολία         *
@@ -148,6 +157,7 @@ int main() {
 	eage = 25;
 	esal = 155.5;
 	strcpy(edname, "GALATA");
+    printf("Let's insert an entry.\n");
 	insertEntries(eNentry, eAentry, eSentry, eDentry, ename, eage, esal,
 			edname, ++recordid);
 
