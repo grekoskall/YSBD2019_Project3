@@ -22,6 +22,8 @@ extern int AM_errno;
 #define AME_CLOSE_NOT_EXIST 14
 #define AME_INSERT_ERROR 15
 #define AME_FILE_DESC_NOT_FOUND 16
+#define AME_ERROR 17
+#define AME_TYPE 18
 #define AME_EOF -1
 
 /* Defines for array sizes */
