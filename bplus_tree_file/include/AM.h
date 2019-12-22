@@ -24,6 +24,8 @@ extern int AM_errno;
 #define AME_FILE_DESC_NOT_FOUND 16
 #define AME_ERROR 17
 #define AME_TYPE 18
+#define AME_MAXSCANS 19
+#define AME_NOTOPEN 20
 #define AME_EOF -1
 
 /* Defines for array sizes */
@@ -78,6 +80,7 @@ int AM_OpenIndexScan(
   void *value /* τιμή του πεδίου-κλειδιού προς σύγκριση */
 );
 
+int search(int fileIndex, void *value, int nodePointer);
 
 void *AM_FindNextEntry(
   int scanDesc /* αριθμός που αντιστοιχεί στην ανοιχτή σάρωση */

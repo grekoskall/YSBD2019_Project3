@@ -17,8 +17,10 @@ struct file_info{
 };
 
 struct scan_info{
-    int lastRecord_block;
-    int lastRecord_position;
+    void *value;
+    int operator;
+    int block;
+    int position;
     int fileDesc;
 };
 
@@ -58,8 +60,10 @@ void AM_Init() {
     }
 
     for(int i = 0; i<MAX_OPEN_SCANS; i++){
-        Scans_array[i].lastRecord_block = -1;
-        Scans_array[i].lastRecord_position = -1;
+        Scans_array[i].operator = 0;
+        Scans_array[i].value = NULL;
+        Scans_array[i].block = -1;
+        Scans_array[i].position = -1;
         Scans_array[i].fileDesc = -1;
     }
 	return;
@@ -493,12 +497,30 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
             memcpy(value, sata+first_entry_position, attrLength1);
 
             int node;
-            if ( *(int*)value1 < *(int*)value ){
-                node = nodePointer;
-            } else {
-                node = new_leaf_id;
+            if(attrType1 == 'i'){
+                if ( *(int*)value1 < *(int*)value ){
+                    node = nodePointer;
+                } else {
+                    node = new_leaf_id;
+                }
+            } else if(attrType1 == 'f'){
+                if ( *(float*)value1 < *(float*)value ){
+                    node = nodePointer;
+                } else {
+                    node = new_leaf_id;
+                }
+            } else if(attrType1 == 'c'){
+                if ( strcmp(value1, value) < 0){
+                    node = nodePointer;
+                } else {
+                    node = new_leaf_id;
+                }
+            } else{
+                AM_errno = AME_ERROR;
+                return AM_errno;
             }
-   
+
+               
             BF_Block_SetDirty(block);
             BF_Block_SetDirty(new_block_leaf);
             if(BF_UnpinBlock(block) != BF_OK){
@@ -520,6 +542,11 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
 
             if(type == 'o'){
                 /* The leaf-node was also a root node, so a new root node must be made, this time it will never be a leaf-node again */
+                int new_root_block;
+                if(BF_GetBlockCounter(file_id, &new_root_block) != BF_OK){
+                    AM_errno = AME_BLOCKS;
+                    return AM_errno;
+                }
                 int entries = 1;
                 if(BF_AllocateBlock(file_id, block) != BF_OK){
                     AM_errno = AME_ALLOCATE;
@@ -536,6 +563,19 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
                     AM_errno = AME_UNPIN;
                     return AM_errno;
                 }
+                Files_array[fileDesc].rootBlock = new_root_block;
+                if(BF_GetBlock(file_id, 0, block) != BF_OK){
+                    AM_errno = AME_GETBLOCK;
+                    return AM_errno;
+                }
+                data = BF_Block_GetData(block);
+                memcpy(data+sizeof(char)*3+sizeof(int)*2, &new_root_block, sizeof(int));
+                BF_Block_SetDirty(block);
+                if(BF_UnpinBlock(block) != BF_OK){
+                    AM_errno = AME_UNPIN;
+                    return AM_errno;
+                }
+
             }
 
             newchildentry = malloc(sizeof(int)+attrLength1);
@@ -572,11 +612,28 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
                 /* Find the position (i) of the array which holds the value that is bigger than the new value inserted. */
                 int test_entry_position = leaf_offset + max_entries*sizeof(int) + entry_size*i;
                 memcpy(value, data+test_entry_position, attrLength1);
+                if(attrType1 == 'i'){
+                    if( *(int*)value1 < *(int*)value ){
+                        flag = 0;
+                        break;
+                    }
+                } else if(attrType1 == 'f'){
+                    if( *(float*)value1 < *(float*)value ){
+                        flag = 0;
+                        break;
+                    }
 
-                if( *(int*)value1 < *(int*)value ){
-                    flag = 0;
-                    break;
+                } else if(attrType1 == 'c'){
+                    if( strcmp(value1, value) < 0){
+                        flag = 0;
+                        break;
+                    }
+                } else{
+                    AM_errno = AME_ERROR;
+                    return AM_errno;
                 }
+
+
                 i++;
             }
 
@@ -623,10 +680,26 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
             memcpy(&next_node, data+node_offset+entry_size*i, sizeof(int));
             memcpy(left_value, data+node_offset+sizeof(int)+node_entry_size*i, attrLength1);
             memcpy(right_value, data+node_offset+sizeof(int)+node_entry_size*(i+1), attrLength1);
-            if( (*(int*)left_value <= *(int*)value1) && (*(int*)right_value > *(int*)value1)){
-                /* If the value is between the left_value and the right_value then we have found our node */
-                break;
+            if(attrType1 == 'i'){
+                if( (*(int*)left_value <= *(int*)value1) && (*(int*)right_value > *(int*)value1)){
+                    /* If the value is between the left_value and the right_value then we have found our node */
+                    break;
+                }
+            } else if(attrType1 == 'f'){
+                if( (*(float*)left_value <= *(float*)value1) && (*(float*)right_value > *(float*)value1)){
+                    /* If the value is between the left_value and the right_value then we have found our node */
+                    break;
+                }
+            } else if(attrType1 == 'c'){
+                if( (strcmp(left_value, value1) <= 0) && (strcmp(right_value, value1) > 0)){
+                    /* If the value is between the left_value and the right_value then we have found our node */
+                    break;
+                }
+            } else{
+                AM_errno = AME_ERROR;
+                return AM_errno;
             }
+            
         }
         if(next_node == 0){
             AM_errno = AME_ERROR;
@@ -763,8 +836,23 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
                     memcpy(value, data+node_offset+sizeof(int)+node_entry_size*i, attrLength1);
                     memcpy(&right_block, data+node_offset+node_entry_size*i+sizeof(int)+attrLength1, sizeof(int));
 
-                    if(*(int*)value > *(int*)child_value){
-                        break;
+                    if(attrType1 == 'i'){
+                        if(*(int*)value > *(int*)child_value){
+                            break;
+                        }
+
+                    } else if (attrType1 == 'f'){
+                        if(*(float*)value > *(float*)child_value){
+                            break;
+                        }
+
+                    } else if (attrType1 == 'c'){
+                        if(strcmp(value, child_value) > 0){
+                            break;
+                        }
+                    } else{
+                        AM_errno = AME_ERROR;
+                        return AM_errno;
                     }
                     position = i+1;
                 }
@@ -817,7 +905,183 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
  * to all the scans that are opened at each moment.
  */
 int AM_OpenIndexScan(int fileDesc, int op, void *value) {
+    int fileIndex = -1;
+    for(int i = 0; i < MAX_OPEN_FILES; i++){
+        if(Files_array[i].fileDesc == fileDesc){
+            fileIndex = i;
+            break;
+        }
+    }
+    if(fileIndex == -1){
+        AM_errno = AME_NOTOPEN;
+        return AM_errno;
+    }
+
+    int rootBlock = Files_array[fileIndex].rootBlock;
+    int attrLength1 = Files_array[fileIndex].attrLength1, attrLength2 = Files_array[fileIndex].attrLength2;
+    char attrType1 = Files_array[fileIndex].attrType1, attrType2 = Files_array[fileIndex].attrType2;
+
+    int flag = -1;
+    int i;
+    for( i = 0; i < MAX_OPEN_SCANS; i++){
+        if(Scans_array[i].value == NULL){
+            flag = 0;
+            break;
+        }
+    }
+    if(flag == -1){
+        AM_errno = AME_MAXSCANS;
+        return AM_errno;
+    }
+    Scans_array[i].value = malloc(attrLength1);
+    memcpy(Scans_array[i].value, value, attrLength1);
+    Scans_array[i].operator = op;
+    Scans_array[i].fileDesc = fileDesc;
+
+    /* Find the block and the position of the entry that satisfies the condition of the operator
+     * For that purpose find the block that could hold the value. It will be the starting block.
+     */
+
+    int leaf_block = search(fileIndex, value, rootBlock);
+    Scans_array[i].block = leaf_block;
+    Scans_array[i].position = -1;
+
     return AME_OK;
+}
+
+/**
+ * Given a search key value, finds its leaf node.
+ */
+int search(int fileIndex, void *value, int nodePointer){
+    int fileDesc = Files_array[fileIndex].fileDesc;
+    char attrType1 = Files_array[fileIndex].attrType1;
+    int attrLength1 = Files_array[fileIndex].attrLength1;
+    char attrType2 = Files_array[fileIndex].attrType2;
+    int attrLength2 = Files_array[fileIndex].attrLength2;
+
+    int node_entry_size = attrLength1+sizeof(int);
+
+    BF_Block *block;
+    BF_Block_Init(&block);
+    char *data;
+    
+    if(BF_GetBlock(fileDesc, nodePointer, block) != BF_OK){
+        AM_errno = AME_GETBLOCK;
+        return AM_errno;
+    }
+    data = BF_Block_GetData(block);
+
+    char node_type;
+    int entries;
+
+    memcpy(&node_type, data, sizeof(char));
+    memcpy(&entries, data+sizeof(char), sizeof(int));
+
+    int left_value, right_value;
+    void *first_key_value = malloc(attrLength1);
+    void *last_key_value = malloc(attrLength1);
+
+
+    if(node_type == 'o' || node_type == 'l'){
+        if(BF_UnpinBlock(block) != BF_OK){
+            AM_errno = AME_UNPIN;
+            return AM_errno;
+        }
+        return nodePointer;
+    } else if(node_type == 'r' || node_type == 'n'){
+        if(attrType1 == 'i'){
+            memcpy(&left_value, data+node_offset, sizeof(int));
+            memcpy(first_key_value, data+node_offset+sizeof(int), attrLength1);
+            
+            if(*(int*)value < *(int*)first_key_value){
+                return search(fileIndex, value, left_value);
+            } else {
+                memcpy(&right_value, data+node_offset+node_entry_size*entries, sizeof(int));
+                memcpy(last_key_value, data+node_offset+sizeof(int)+node_entry_size*entries, attrLength1);
+
+                if(*(int*)value > *(int*)last_key_value){
+                    return search(fileIndex, value, right_value);
+                } else {
+                    int pointer;
+                    for(int i = 1; i < entries; i++){
+                        memcpy(&pointer, data+node_offset+node_entry_size*i, sizeof(int));
+                        memcpy(first_key_value, data+node_offset+sizeof(int)+node_entry_size*(i-1), attrLength1);
+                        memcpy(last_key_value, data+node_offset+sizeof(int)+node_entry_size*i, attrLength1);
+                        
+                        if((*(int*)value >= *(int*)first_key_value) &&(*(int*)value < *(int*)last_key_value)){
+                            return search(fileIndex, value, pointer);
+                        }
+                    }
+                    AM_errno = AME_ERROR;
+                    return AM_errno;
+                }
+            }
+        }
+        if(attrType1 == 'f'){
+            memcpy(&left_value, data+node_offset, sizeof(int));
+            memcpy(first_key_value, data+node_offset+sizeof(int), attrLength1);
+            
+            if(*(float*)value < *(float*)first_key_value){
+                return search(fileIndex, value, left_value);
+            } else {
+                memcpy(&right_value, data+node_offset+node_entry_size*entries, sizeof(int));
+                memcpy(last_key_value, data+node_offset+sizeof(int)+node_entry_size*entries, attrLength1);
+
+                if(*(float*)value > *(float*)last_key_value){
+                    return search(fileIndex, value, right_value);
+                } else {
+                    int pointer;
+                    for(int i = 1; i < entries; i++){
+                        memcpy(&pointer, data+node_offset+node_entry_size*i, sizeof(int));
+                        memcpy(first_key_value, data+node_offset+sizeof(int)+node_entry_size*(i-1), attrLength1);
+                        memcpy(last_key_value, data+node_offset+sizeof(int)+node_entry_size*i, attrLength1);
+                        
+                        if((*(float*)value >= *(float*)first_key_value) &&(*(float*)value < *(float*)last_key_value)){
+                            return search(fileIndex, value, pointer);
+                        }
+                    }
+                    AM_errno = AME_ERROR;
+                    return AM_errno;
+                }
+            }
+        }
+        if(attrType1 == 'c'){
+            memcpy(&left_value, data+node_offset, sizeof(int));
+            memcpy(first_key_value, data+node_offset+sizeof(int), attrLength1);
+            
+            if(strcmp(value, first_key_value) < 0){
+                return search(fileIndex, value, left_value);
+            } else {
+                memcpy(&right_value, data+node_offset+node_entry_size*entries, sizeof(int));
+                memcpy(last_key_value, data+node_offset+sizeof(int)+node_entry_size*entries, attrLength1);
+
+                if(strcmp(value, last_key_value) > 0){
+                    return search(fileIndex, value, right_value);
+                } else {
+                    int pointer;
+                    for(int i = 1; i < entries; i++){
+                        memcpy(&pointer, data+node_offset+node_entry_size*i, sizeof(int));
+                        memcpy(first_key_value, data+node_offset+sizeof(int)+node_entry_size*(i-1), attrLength1);
+                        memcpy(last_key_value, data+node_offset+sizeof(int)+node_entry_size*i, attrLength1);
+                        
+                        if((strcmp(value, first_key_value) >= 0) && (strcmp(value, last_key_value) < 0)){
+                            return search(fileIndex, value, pointer);
+                        }
+                    }
+                    AM_errno = AME_ERROR;
+                    return AM_errno;
+                }
+            }
+        }
+        if(BF_UnpinBlock(block) != BF_OK){
+            AM_errno = AME_UNPIN;
+            return AM_errno;
+        }
+    } else {
+        AM_errno = AME_ERROR;
+        return AM_errno;
+    }
+
 }
 
 /**
@@ -842,8 +1106,7 @@ void *AM_FindNextEntry(int scanDesc) {
  */
 int AM_CloseIndexScan(int scanDesc) {
 
-    free(scan_info[scanDesc]);
-    scan_info[scanDesc] = NULL; // So we can recognize which elements of the array are not being used
+    //scan_info[scanDesc] = NULL; // So we can recognize which elements of the array are not being used
 
     return AME_OK;
 }
@@ -914,6 +1177,12 @@ void AM_PrintError(char *errString) {
                 break;
         case AME_TYPE:
                 printf("The attribute type and length do not add up.\n");
+                break;
+        case AME_MAXSCANS:
+                printf("The Scans_array is already full.");
+                break;
+        case AME_NOTOPEN:
+                printf("The file is not opened.");
                 break;
         default:
                 printf("No error was attributed.\n");
