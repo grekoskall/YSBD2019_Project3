@@ -817,7 +817,7 @@ int insertEntry(int fileDesc, int nodePointer, void *value1, void *value2, void 
  * to all the scans that are opened at each moment.
  */
 int AM_OpenIndexScan(int fileDesc, int op, void *value) {
-  return AME_OK;
+    return AME_OK;
 }
 
 /**
@@ -841,7 +841,11 @@ void *AM_FindNextEntry(int scanDesc) {
  * from the table of open scans.
  */
 int AM_CloseIndexScan(int scanDesc) {
-  return AME_OK;
+
+    free(scan_info[scanDesc]);
+    scan_info[scanDesc] = NULL; // So we can recognize which elements of the array are not being used
+
+    return AME_OK;
 }
 
 /**
